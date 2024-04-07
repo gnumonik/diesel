@@ -20,6 +20,11 @@ import Data.GADT.Compare
 
    If the set of ground types is determined by a finitely enumable
    GADT with unique indices, we have a closed type universe.
+
+   We never use this at the term level, but we use the promoted
+   constructors. The point of this is that it lets us write
+   typeclass instances that allow the constraint solver to
+   distinguish ground terms from functions.
 -}
 data Type t
   = Ty t

@@ -12,13 +12,14 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 
 module Diesel.Expr.Internal (
-    Expr
+    Expr(Constant,Abs,App,Builtin)
   , typeEq
   , typeOf
   , (#)
   , subst
   , normalize
   , lam1
+  , ConstantIn(..)
   ) where
 
 import qualified Data.Kind as GHC
@@ -28,7 +29,7 @@ import Data.Type.Equality (type (:~:)(Refl))
 
 
 import Diesel.Type ( TyRep(..), Type(..) )
-import Diesel.Uni ( TypeIn(..), Each(..) )
+import Diesel.Uni ( TypeIn(..), Each(..), KnownIn )
 
 {-
   An expression.
@@ -162,3 +163,9 @@ normalize = \case
       Abs n body -> subst n a' body
       other -> pure $ App other a'
   Abs n body -> Abs n <$> normalize body
+
+class ConstantIn uni k where
+  val :: forall fun. Inner uni k -> Expr uni fun k
+
+instance (TypeIn uni (Ty t), KnownIn uni (Ty t)) => ConstantIn uni (Ty t) where
+  val = Constant
