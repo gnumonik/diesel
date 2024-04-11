@@ -31,10 +31,13 @@ data Type t
   {- /\ A type constructor.
   -}
   | Type t :~> Type t
-  {- /\ A function.
-  -}
+  | (Type t) :& (Type t)
+  | (Type t) :| (Type t)
+  | List (Type t)
   deriving (Show, Eq)
 infixr 0 :~>
+infixr 3 :&
+infixr 2 :|
 
 {-
    Witnesses a type in a given universe.
@@ -42,6 +45,11 @@ infixr 0 :~>
 data TyRep :: forall (k :: GHC.Type). (Type k -> GHC.Type ) -> Type k ->  GHC.Type where
   TyRep :: uni k -> TyRep uni k
   (:~~>) :: TyRep uni k1 -> TyRep uni k2  -> TyRep uni (k1 :~> k2)
+  (:&&) :: TyRep uni k1 -> TyRep uni k2 -> TyRep uni (k1 :& k2)
+  (:||) :: TyRep uni k1 -> TyRep uni k2 -> TyRep uni (k1 :| k2)
+  ListRep :: TyRep uni k1 -> TyRep uni (List k1)
+
+
 
 instance GEq uni => GEq (TyRep uni) where
   geq (TyRep t) (TyRep t') = case geq t t' of
@@ -52,6 +60,19 @@ instance GEq uni => GEq (TyRep uni) where
     Just Refl -> case geq b b' of
       Just Refl -> Just Refl
       Nothing -> Nothing
+  geq (a :&& b) (a' :&& b') = case geq a a' of
+    Nothing -> Nothing
+    Just Refl -> case geq b b' of
+      Just Refl -> Just Refl
+      Nothing -> Nothing
+  geq (a :|| b) (a' :|| b') = case geq a a' of
+    Nothing -> Nothing
+    Just Refl -> case geq b b' of
+      Just Refl -> Just Refl
+      Nothing -> Nothing
+  geq (ListRep a) (ListRep b) = case geq a b of
+    Nothing -> Nothing
+    Just Refl -> Just Refl
   geq _ _ = Nothing
 
 

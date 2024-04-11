@@ -25,6 +25,8 @@ library
       Diesel.Expr.Internal
       Diesel.Type
       Diesel.Uni
+      Diesel.Universal
+      Diesel.Prelude
       Diesel.TH.Derive
     -- other-extensions:
     build-depends:
