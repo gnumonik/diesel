@@ -8,19 +8,19 @@
 
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PartialTypeSignatures #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE QuantifiedConstraints, OverloadedStrings #-}
 
 module Diesel.Universal where
 
 import qualified Data.Kind as GHC
 
-import Data.GADT.Compare (GEq (..), defaultEq)
+import Data.GADT.Compare (GEq (..))
 import Data.Type.Equality (type (:~:)(Refl))
-import Diesel.Type
-import Diesel.Uni
-import Data.List (foldl')
+import Diesel.Type ( Type(List, (:|), (:&), (:~>)), TyRep )
 
+import Prettyprinter
+
+-- todo: Don't have a tyrep of the function, just have tyreps for the type args
 data Universal :: (Type t -> GHC.Type) -> Type t -> GHC.Type where
   -- pair stuff
   FstPair :: forall uni a b. TyRep uni ((a :& b) :~> a) -> Universal uni ((a :& b) :~> a)
@@ -38,6 +38,23 @@ data Universal :: (Type t -> GHC.Type) -> Type t -> GHC.Type where
   UnconsList :: forall uni x. TyRep uni (List x :~> (List x :| (x :& List x))) -> Universal uni (List x :~> (List x :| (x :& List x)))
   FoldrList :: forall uni a b. TyRep uni ((a :~> b :~> b) :~> b :~> List a :~> b) -> Universal uni ((a :~> b :~> b) :~> b :~> List a :~> b)
 
+deriving instance (forall t. Show (TyRep uni t)) => Show (Universal uni tx)
+
+instance (forall tx. Pretty (TyRep uni tx)) => Pretty (Universal uni t) where
+  pretty = align . group . \case
+    FstPair _ -> "fst" -- <+> "@" <> parens (pretty rp)
+    SndPair _ -> "snd" -- <+> "@" <> parens (pretty rp)
+    InjPair _ -> "pair" -- <+> "@" <> parens (pretty rp)
+
+    InjL _ -> "inL" -- <+> "@" <> parens (pretty rp)
+    InjR _ -> "inR" -- <+> "@" <> parens (pretty rp)
+    Switch _ -> "switch" -- <+> "@" <> parens (pretty rp)
+    ConsList _ -> "cons" --  <+> "@" <> parens (pretty rp)
+    NilList _ -> "nil" -- <+> "@" <> parens (pretty rp)
+    UnconsList _ -> "uncons" -- <+> "@" <> parens (pretty rp)
+    FoldrList _ -> "foldr" -- <+> "@" <> parens (pretty rp)
+
+
 typeOfUniversal :: Universal uni t -> TyRep uni t
 typeOfUniversal = \case
   FstPair r -> r
@@ -50,7 +67,6 @@ typeOfUniversal = \case
   NilList r -> r
   UnconsList r -> r
   FoldrList r -> r
-
 
 instance GEq (TyRep uni) => GEq (Universal uni) where
   geq (FstPair a) (FstPair b) = case geq a b of

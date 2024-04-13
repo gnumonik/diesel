@@ -8,8 +8,8 @@
 
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PartialTypeSignatures #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE QuantifiedConstraints #-}
+
+{-# LANGUAGE QuantifiedConstraints, OverloadedStrings #-}
 
 module Diesel.Expr.Internal  where
 
@@ -23,6 +23,14 @@ import Diesel.Type
 import Diesel.Uni
 import Data.List (foldl')
 import Diesel.Universal
+
+import Prettyprinter
+
+sparens :: String -> String
+sparens str = "(" <> str <> ")"
+
+showParens :: Show a => a -> String
+showParens = go . show where go str = "(" <> str <> ")"
 
 {-
   An expression.
@@ -44,11 +52,11 @@ import Diesel.Universal
 data Expr :: forall (t :: GHC.Type). (Type t -> GHC.Type) -> (Type t -> GHC.Type) -> Type t -> GHC.Type where
   Constant :: TypeIn uni (Ty t) => Inner uni (Ty t) -> Expr uni fun (Ty t)
 
-  Abs :: TypeIn uni a => Int -> (Expr uni fun b) -> Expr uni fun (a :~> b)
+  Abs :: TyRep uni a ->  Int -> (Expr uni fun b) -> Expr uni fun (a :~> b)
 
-  App :: TypeIn uni b => Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
+  App ::  Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
 
-  Builtin :: TypeIn uni (a :~> b) => fun (a :~> b) -> Expr uni fun (a :~> b)
+  Builtin :: TyRep uni a -> TyRep uni b -> fun (a :~> b) -> Expr uni fun (a :~> b)
 
   Data :: ADT uni fun t -> Expr uni fun t
 
@@ -61,6 +69,24 @@ data ADT :: forall (t :: GHC.Type). (Type t -> GHC.Type) -> (Type t -> GHC.Type)
   InL :: TyRep uni b -> Expr uni fun a -> ADT uni fun (a :| b)
   InR :: TyRep uni a -> Expr uni fun b -> ADT uni fun (a :| b)
   MkList :: TyRep uni a -> [Expr uni fun a] -> ADT uni fun (List a)
+
+instance (Each Show uni, forall tx. Show (fun tx), forall tx. Show (uni tx)) => Show (ADT uni fun t) where
+  show (MkPair e1 e2) = "MkPair " <> showParens e1 <> " " <> showParens e2
+  show (InL b a) = "InL " <> showParens b <> " " <> showParens a
+  show (InR b a) = "InR " <> showParens b <> " " <> showParens a
+  show (MkList r xs) = "MkList " <> showParens r <> " " <> show xs
+
+instance ( Each Pretty uni
+         , forall tx. Pretty (TyRep uni tx)
+         , forall tx. Pretty (fun tx)
+         , forall tx. Pretty (uni tx)
+         , forall tx. Pretty (Universal uni tx)
+         ) => Pretty (ADT uni fun t) where
+  pretty = \case
+    MkPair a b -> pretty a <> " & " <> pretty b
+    InL b a ->  pretty a <+> pipe <+>  "@" <> parens (pretty b)
+    InR b a -> parens (pretty b) <+> pipe <+> pretty a
+    MkList _ xs -> prettyList xs
 
 typeOfADT ::  ADT uni fun t -> TyRep uni t
 typeOfADT = \case
@@ -79,7 +105,7 @@ instance (GEq uni, GEq fun, Each Eq uni) => GEq (ADT uni fun) where
   geq (InR repA a) (InR repB b) = case (geq repA repB, geq a b) of
     (Just Refl, Just Refl) -> Just Refl
     _ -> Nothing
-  geq (MkList repA a) (MkList repB  b) = case geq repA repB  of
+  geq (MkList repA a) (MkList repB  b) = case geq repA repB of
     Just Refl | and (zipWith defaultEq a b) -> Just Refl
     _ -> Nothing
   geq _ _ = Nothing
@@ -96,15 +122,13 @@ typeEq e1 e2 = case geq (typeOf e1) (typeOf e2) of
 typeOf :: forall uni fun t. Expr uni fun t -> TyRep uni t
 typeOf = \case
   Constant _ -> rep @_ @uni @t
-  Abs _  body -> go body
-  App _ _ -> rep @_ @uni @t
-  Builtin _ -> rep @_ @uni @t
+  Abs a _  b -> a :~~> typeOf b
+  App f _ -> case typeOf f of
+    (_ :~~> b) -> b
+  Builtin a b _ -> a :~~> b
   Var trep _ -> trep
   Data adt -> typeOfADT adt
   CompilerBuiltin ufun -> typeOfUniversal ufun
- where
-   go :: forall a b. TypeIn uni a => Expr uni fun b -> TyRep uni (a :~> b)
-   go e = rep @_ @uni @a :~~> typeOf e
 
 {-
     NOTE: The GEq instance checks structural equality (it's more like a real Eq instance),
@@ -117,21 +141,50 @@ instance (GEq uni, GEq fun, Each Eq uni) => GEq (Expr uni fun) where
       TyRep uni -> if each @Eq @uni uni $ x == y
                    then  Just Refl
                    else Nothing
-  geq e1@(Abs n body) e2@(Abs n' body') | n == n' = case (geq body body', geq (typeOf e1) (typeOf e2)) of
+  geq e1@(Abs _ n body) e2@(Abs _ n' body') | n == n' = case (geq body body', geq (typeOf e1) (typeOf e2)) of
         (Just Refl, Just Refl) -> Just Refl
         _ -> Nothing
   geq e1@(App f a) e2@(App f' a') = case (geq f f', geq a a', geq (typeOf e1) (typeOf e2)) of
     (Just Refl, Just Refl, Just Refl) -> Just Refl
     _ -> Nothing
-  geq (Builtin b1) (Builtin b2) = case geq b1 b2 of
-    Just Refl -> Just Refl
-    Nothing -> Nothing
+  geq (Builtin a1 b1 f1) (Builtin a2 b2 f2) = case (geq b1 b2, geq a1 a2, geq f1 f2) of
+    (Just Refl, Just Refl, Just Refl) -> Just Refl
+    _  -> Nothing
   geq (Var r n) (Var r' n') | n == n' = case geq r r' of
     Just Refl -> Just Refl
     Nothing -> Nothing
   geq _ _ = Nothing
 
-(#) :: TypeIn uni b => Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
+instance (Each Show uni, forall tx. Show (fun tx), forall tx. Show (uni tx)) => Show (Expr uni fun t) where
+  show = \case
+    xp@(Constant v) -> case typeOf xp of
+      TyRep uni -> each @Show @uni uni $ show v
+    Abs r i body -> "Abs " <> showParens r <> " " <> show i <> " " <> showParens body
+    App e1 e2 -> "App " <> showParens e1 <> " " <> showParens e2
+    Builtin t1 t2 fun -> "Builtin " <> sparens (show t1 <> " :~> " <> show t2) <> " " <> show fun
+    Data adt -> "Data " <> showParens adt
+    Var t i -> "Var " <> show t <> " " <> show i
+    CompilerBuiltin uf -> "CompilerBuiltin " <> show uf
+
+instance ( Each Pretty uni
+         , forall tx. Pretty (TyRep uni tx)
+         , forall tx. Pretty (fun tx)
+         , forall tx. Pretty (uni tx)
+         , forall tx. Pretty (Universal uni tx)) => Pretty (Expr uni fun t) where
+  pretty = \case
+    xp@(Constant v) -> case typeOf xp of
+      TyRep uni -> each @Pretty @uni uni $ pretty v
+    Abs ty i body -> align . group $
+        "\\" <> parens ("x" <> pretty i <> " :: " <> pretty ty) <> " -> "
+          <> hardline <> indent 2 (align (pretty body))
+    App e1 e2 -> hsep $ map (group . parens) [pretty e1, pretty e2]
+    Builtin _ _ bi -> pretty bi -- <+> "@" <> pretty t1 <+> "@" <> pretty t2
+    Data adt -> pretty adt
+    Var t i -> parens ("x" <> pretty i <> " :: " <> pretty t)
+    CompilerBuiltin uf -> pretty uf
+
+
+(#) :: Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
 f # x = App f x
 
 {-  "Using Circular Programs for Higher-Order Syntax" - Emil Axelsson & Koen Claesson
@@ -139,10 +192,10 @@ f # x = App f x
 
     Really neat trick for safe construction of terms.
 -}
-lam1 :: forall uni fun a b. (TypeIn uni a) => (Expr uni fun a -> Expr uni fun b) -> Expr uni fun (a :~> b)
-lam1 f = Abs n body
+lam1 :: forall uni fun a b. TyRep uni a ->  (Expr uni fun a -> Expr uni fun b) -> Expr uni fun (a :~> b)
+lam1 r f = Abs r n body
   where
-    body = f $ Var (rep @_ @uni @a) n
+    body = f $ Var r n
     n = maxBV body + 1
 
 bot :: Int
@@ -151,11 +204,11 @@ bot = 0
 maxBV :: Expr uni fun t -> Int
 maxBV = \case
   Var _ _ -> bot
-  Builtin _ -> bot
+  Builtin {} -> bot
   CompilerBuiltin _ -> bot
   Constant _ -> bot
   App f a -> maxBV f `max` maxBV a
-  Abs n _ -> n
+  Abs _ n _ -> n
   Data adt -> case adt of
        MkPair a b -> maxBV a `max` maxBV b
        InL _ a -> maxBV a
@@ -173,15 +226,16 @@ subst :: forall uni fun x t
       -> Maybe (Expr uni fun t)
 subst i new = \case
   Constant v  -> pure $ Constant v
-  Builtin b -> pure $ Builtin b
+  Builtin a b f -> pure $ Builtin a b f
   CompilerBuiltin u -> pure $ CompilerBuiltin u
   App f a -> App <$> subst i new f <*> subst i new a
-  Abs n b -> Abs n <$> subst n new b
+  Abs r n b  -> Abs r n <$> subst i new b
   v@(Var _ n) | n == i -> do
     Refl <- typeEq v new
     pure new
   Var r n -> pure $ Var r n
   Data adt -> Data <$> substADT i new adt
+
 
 substADT :: forall uni fun x t
           . (GEq uni, GEq fun)
@@ -201,16 +255,18 @@ normalize :: forall uni fun a
           -> Maybe (Expr uni fun a)
 normalize = \case
   Constant v -> pure $ Constant v
-  Builtin f -> pure $ Builtin f
+  Builtin a b f -> pure $ Builtin a b f
   CompilerBuiltin f -> pure $ CompilerBuiltin f
   Var r n -> pure $ Var r n
-  App f a -> do
-    f' <- normalize f
-    a' <- normalize a
-    case f' of
-      Abs n body -> subst n a' body
-      other -> pure $ App other a'
-  Abs n body -> Abs n <$> normalize body
+  App f a -> case normalize f of
+    Just (Abs _ ix body) -> do
+      subst ix a body >>= normalize
+    Just _ -> do
+      f' <- normalize f
+      a' <- normalize a
+      pure $ App f' a'
+    Nothing -> Nothing
+  Abs r n body -> Abs r n <$> normalize body
   Data adt -> Data <$> case adt of
     MkPair a b -> MkPair <$> normalize a <*> normalize b
     InL r a -> InL r <$> normalize a
@@ -225,7 +281,6 @@ instance (TypeIn uni (Ty t), KnownIn uni (Ty t)) => ConstantIn uni (Ty t) where
 
 instance (ConstantIn uni a, ConstantIn uni b) => ConstantIn uni (a :& b) where
   val (a :/\ b) = Data $ MkPair (val a) (val b)
-
 
 mkPair_ :: Expr uni fun a -> Expr uni fun b -> Expr uni fun (a :& b)
 mkPair_ e1 e2 = Data $ MkPair e1 e2

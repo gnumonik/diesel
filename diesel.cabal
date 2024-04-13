@@ -14,7 +14,7 @@ extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall
+    ghc-options: -Wall -Werror
 
 library
     import:           warnings
@@ -39,6 +39,7 @@ library
       , th-abstraction
       , pretty-simple
       , text
+      , prettyprinter
     hs-source-dirs:   src
     default-language: GHC2021
 
