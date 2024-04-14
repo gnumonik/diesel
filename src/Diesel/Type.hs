@@ -71,6 +71,9 @@ data TyRep :: forall (k :: GHC.Type). (GHC.Type -> GHC.Type ) -> Type k ->  GHC.
   ListRep :: TyRep uni k1 -> TyRep uni (List k1)
   (:@@) :: uni (K f) -> TyRep uni a -> TyRep uni (TyCon (K f) :@ a)
   StarRep :: TyRep uni Star
+infixr 0 :~~>
+infixr 3 :&&
+infixr 2 :||
 infixl 9 :@@
 
 deriving instance (forall tx. Show (uni tx)) => Show (TyRep uni t)
@@ -110,6 +113,5 @@ instance GEq uni => GEq (TyRep uni) where
   geq (ListRep a) (ListRep b) = case geq a b of
     Nothing -> Nothing
     Just Refl -> Just Refl
+  geq StarRep StarRep = Just Refl
   geq _ _ = Nothing
-
-

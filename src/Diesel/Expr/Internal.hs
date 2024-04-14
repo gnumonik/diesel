@@ -56,7 +56,7 @@ data Expr :: forall (t :: GHC.Type). (GHC.Type -> GHC.Type) -> (Type t -> GHC.Ty
 
   App ::  Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
 
-  Builtin :: TyRep uni a -> TyRep uni b -> fun (a :~> b) -> Expr uni fun (a :~> b)
+  Builtin :: TyRep uni x-> fun x -> Expr uni fun x
 
   Data :: ADT uni fun t -> Expr uni fun t
 
@@ -125,7 +125,7 @@ typeOf = \case
   Abs a _  b -> a :~~> typeOf b
   App f _ -> case typeOf f of
     (_ :~~> b) -> b
-  Builtin a b _ -> a :~~> b
+  Builtin x _ -> x
   Var trep _ -> trep
   Data adt -> typeOfADT adt
   CompilerBuiltin ufun -> typeOfUniversal ufun
@@ -147,8 +147,8 @@ instance (GEq uni, GEq fun, Each Eq uni) => GEq (Expr uni fun) where
   geq e1@(App f a) e2@(App f' a') = case (geq f f', geq a a', geq (typeOf e1) (typeOf e2)) of
     (Just Refl, Just Refl, Just Refl) -> Just Refl
     _ -> Nothing
-  geq (Builtin a1 b1 f1) (Builtin a2 b2 f2) = case (geq b1 b2, geq a1 a2, geq f1 f2) of
-    (Just Refl, Just Refl, Just Refl) -> Just Refl
+  geq (Builtin x1 f1) (Builtin x2 f2) = case (geq x1 x2, geq f1 f2) of
+    (Just Refl, Just Refl) -> Just Refl
     _  -> Nothing
   geq (Var r n) (Var r' n') | n == n' = case geq r r' of
     Just Refl -> Just Refl
@@ -161,7 +161,7 @@ instance (Each Show uni, forall tx. Show (fun tx), forall tx. Show (uni tx)) => 
       RepT uni -> each @Show @uni uni $ show v
     Abs r i body -> "Abs " <> showParens r <> " " <> show i <> " " <> showParens body
     App e1 e2 -> "App " <> showParens e1 <> " " <> showParens e2
-    Builtin t1 t2 fun -> "Builtin " <> sparens (show t1 <> " :~> " <> show t2) <> " " <> show fun
+    Builtin x fun -> "Builtin " <> showParens x  <> " " <> show fun
     Data adt -> "Data " <> showParens adt
     Var t i -> "Var " <> show t <> " " <> show i
     CompilerBuiltin uf -> "CompilerBuiltin " <> show uf
@@ -179,7 +179,7 @@ instance ( Each Pretty uni
         "\\" <> parens ("x" <> pretty i <> " :: " <> pretty ty) <> " -> "
           <> hardline <> indent 2 (align (pretty body))
     App e1 e2 -> hsep $ map (group . parens) [pretty e1, pretty e2]
-    Builtin _ _ bi -> pretty bi -- <+> "@" <> pretty t1 <+> "@" <> pretty t2
+    Builtin  _ bi -> pretty bi -- <+> "@" <> pretty t1 <+> "@" <> pretty t2
     Data adt -> pretty adt
     Var t i -> parens ("x" <> pretty i <> " :: " <> pretty t)
     CompilerBuiltin uf -> pretty uf
@@ -187,6 +187,10 @@ instance ( Each Pretty uni
 
 (#) :: Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
 f # x = App f x
+
+(#$) :: Expr uni fun (a :~> b) -> Expr uni fun a -> Expr uni fun b
+f #$ x = f # x
+infixr 0 #$
 
 {-  "Using Circular Programs for Higher-Order Syntax" - Emil Axelsson & Koen Claesson
     https://emilaxelsson.github.io/documents/axelsson2013using.pdf
@@ -227,7 +231,7 @@ subst :: forall uni fun x t
       -> Maybe (Expr uni fun t)
 subst i new = \case
   Constant v  -> pure $ Constant v
-  Builtin a b f -> pure $ Builtin a b f
+  Builtin x f -> pure $ Builtin x f
   CompilerBuiltin u -> pure $ CompilerBuiltin u
   App f a -> App <$> subst i new f <*> subst i new a
   Abs r n b  -> Abs r n <$> subst i new b
@@ -256,7 +260,7 @@ normalize :: forall uni fun a
           -> Maybe (Expr uni fun a)
 normalize = \case
   Constant v -> pure $ Constant v
-  Builtin a b f -> pure $ Builtin a b f
+  Builtin x f -> pure $ Builtin x f
   CompilerBuiltin f -> pure $ CompilerBuiltin f
   Var r n -> pure $ Var r n
   App f a -> case normalize f of

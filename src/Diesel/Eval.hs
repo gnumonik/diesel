@@ -17,7 +17,7 @@ import Data.GADT.Compare ( GEq(geq))
 import Data.Constraint.Extras ( Has(argDict) )
 
 import Diesel.Type
-    ( Type((:~>), Ty, TyCon, (:@)), K, TyRep((:@@)), T )
+    ( Type((:~>), Ty, TyCon, (:@)), K, TyRep(..), T )
 import Diesel.Uni
     ( Inner(Val, Con1, (:/\), L, R, ListVal, Fun),
       KnownIn(..),
@@ -29,7 +29,7 @@ import Diesel.Expr
       ADT(MkList, MkPair, InL, InR),
       ConstantIn(val),
       Expr(..),
-      Lam(lam) )
+      Lam(lam), (#$) )
 import Data.Maybe ( fromMaybe )
 import Diesel.Universal ( Universal(..) )
 import Data.Coerce (coerce)
@@ -65,7 +65,7 @@ asFunction (Fun f) = f
 -}
 type Eval :: forall t. (GHC.Type -> GHC.Type) -> (Type t -> GHC.Type) ->  GHC.Constraint
 class GEq fun =>  Eval uni fun  where
-  evalBuiltin :: forall a b. fun (a :~> b) -> Inner uni (a :~> b) -- Inner uni a -> Inner uni b
+  evalBuiltin :: forall a. fun a -> Inner uni a  -- Inner uni a -> Inner uni b
 
 eval :: forall uni fun ty
       . (GEq uni,  Eval uni fun, forall w. Show (Expr uni fun w))
@@ -85,7 +85,7 @@ eval e = go $ fromMaybe  e  (normalize e)
         Right (Fun f') -> case go x of
           Left bad -> error (show bad) --  Left ex
           Right x' -> pure $ f' x'
-      Builtin _ _ fun -> pure $ evalBuiltin @_ @uni' @fun' fun
+      Builtin  _ fun -> pure $ evalBuiltin @_ @uni' @fun' fun
       CompilerBuiltin u -> pure $ evalUniversal u
       Data adt -> case adt of
         MkPair a b -> case go a of
@@ -149,6 +149,7 @@ instance  KnownIn U (K Maybe) where
 data F :: forall t. Type t -> GHC.Type where
   Add :: F (Ty Int :~> Ty Int :~> Ty Int)
   Subtract :: F (Ty Int :~> Ty Int :~> Ty Int)
+  IfThenElse :: TyRep U res -> F (Ty Bool :~> res :~> res :~> res)
   EJust :: TyRep U t -> F (t :~> MaybeT :@ t)
   ENothing :: TyRep U t -> F (MaybeT :@ t)
 
@@ -156,6 +157,7 @@ instance Pretty (F t) where
   pretty = \case
     Add -> "add"
     Subtract -> "subtract"
+    IfThenElse _ -> "if"
     EJust rp -> "Just" <+> "@" <> parens (pretty rp)
     ENothing rp -> "Nothing" <+> "@" <> parens (pretty rp)
 
@@ -163,12 +165,16 @@ instance Show (F t) where
   show = \case
     Add -> "Add"
     Subtract -> "Subtract"
+    IfThenElse r -> "IfThenElse " <> show r
     EJust r -> "EJust " <> show r
     ENothing r -> "ENothing " <> show r
 
 instance GEq F where
  geq Add Add = Just Refl
  geq Subtract Subtract = Just Refl
+ geq (IfThenElse r1) (IfThenElse r2) = case geq r1 r2 of
+   Just Refl -> Just Refl
+   Nothing -> Nothing
  geq (EJust r1) (EJust r2) = case geq r1 r2 of
    Just Refl -> Just Refl
    Nothing -> Nothing
@@ -188,23 +194,28 @@ instance Eval U F where
     Subtract -> let doMinus :: Int -> Int -> Int
                     doMinus = (-)
                 in coerce doMinus
+    IfThenElse _ ->  Fun $ \cond -> Fun $ \troo -> Fun $ \fawlse -> if coerce cond then troo else fawlse
     EJust _ -> Fun $ \x -> Con1 $ Just x
+    ENothing _ -> Con1 Nothing
     --ENothing r -> Con1 Nothing
 
 
 plus :: Expr U F (IntT :~> IntT :~> IntT)
-plus = Builtin rep rep Add
+plus = Builtin rep  Add
 
 minus :: Expr U F (IntT :~> IntT :~> IntT)
-minus = Builtin rep rep Subtract
+minus = Builtin rep  Subtract
 
-uJust :: forall t. TypeIn U t => TyRep U t ->  Expr U F (t :~> MaybeT :@ t)
-uJust r  = lam1 r  $ \x -> Builtin r (UMaybe :@@ r) (EJust r) # x
+ifte :: forall t. TyRep U t -> Expr U F (BoolT :~> t :~> t :~> t)
+ifte trep = Builtin (RepT UBool :~~> trep :~~> trep :~~> trep)  (IfThenElse trep)
 
-testExpr :: Expr U F (IntT :~> (IntT :~> IntT))
-testExpr = lam $ \x y -> minus # (plus # x # y) #  (minus # y # x)
+just :: forall t. TyRep U t ->  Expr U F (t :~> MaybeT :@ t)
+just r  = lam1 r  $ \x -> Builtin  (r :~~> (UMaybe :@@ r)) (EJust r) # x
 
-result :: Either (Expr U F IntT) (Inner U IntT)
+testExpr :: Expr U F (IntT :~> IntT :~>  MaybeT :@ IntT)
+testExpr = lam $ \x y -> just rep #$ minus # (plus # x # y) #  (minus # y # x)
+
+result :: Either (Expr U F (MaybeT :@ IntT)) (Inner U (MaybeT :@ IntT))
 result = eval $ testExpr # val 1 # val 1
 
 -- Need a TypeIn instance for maybe or this won't work. Need a new ctor of Type that can be matched in

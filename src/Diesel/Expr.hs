@@ -23,6 +23,7 @@ import Diesel.Type ( Type((:~>)) )
 import Diesel.Uni ( TypeIn(rep) )
 import Diesel.Expr.Internal
     ( (#),
+      (#$),
       bot,
       inL_,
       inR_,
