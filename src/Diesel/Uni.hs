@@ -12,6 +12,7 @@
 
 {-# LANGUAGE DerivingStrategies #-}
 
+
 module Diesel.Uni where
 
 import qualified Data.Kind as GHC
@@ -37,9 +38,25 @@ import Type.Reflection (Typeable, typeRep)
     `Closed`).
 
 -}
-type KnownIn :: forall (k :: GHC.Type). (Type k -> GHC.Type) -> Type k -> GHC.Constraint
+type KnownIn ::  (GHC.Type -> GHC.Type) -> GHC.Type -> GHC.Constraint
 class KnownIn uni ty where
   knownIn :: uni ty
+
+
+class KnownIn uni t  => IsInner uni (t :: GHC.Type) where
+  type TypeOf t :: (Type GHC.Type)
+  toType :: uni t -> TyRep uni (TypeOf t)
+  fromType :: TyRep uni (TypeOf t) -> uni t
+
+instance KnownIn uni (T t) => IsInner uni (T t) where
+  type TypeOf (T t) = Ty t
+  toType = RepT
+  fromType (RepT uni) = uni
+
+instance KnownIn uni (K f) => IsInner uni (K f) where
+  type TypeOf (K f) = TyCon (K f)
+  toType = RepK
+  fromType (RepK uni) = uni
 
 
 {-
@@ -58,20 +75,22 @@ class KnownIn uni ty where
     cannot do so anyway. All of the valid instances should be derived from
     `KnownIn`.
 -}
-type TypeIn :: forall (k :: GHC.Type). (Type k -> GHC.Type) -> Type k -> GHC.Constraint
+type TypeIn :: forall (k :: GHC.Type). (GHC.Type -> GHC.Type) -> Type k -> GHC.Constraint
 class (GEq uni) => TypeIn uni ty where
   data Inner uni ty :: GHC.Type
   rep :: TyRep uni ty
 
-instance (GEq uni, KnownIn uni (TyCon (K f))) => TypeIn uni (TyCon (K f)) where
+instance (GEq uni, KnownIn uni (K f), IsInner uni (K f), TypeOf (K f) ~ TyCon (K f)) => TypeIn uni (TyCon (K f)) where
   newtype Inner uni (TyCon (K f)) = TyConProxy (Proxy f) deriving (Show, Eq, Ord)
-  rep = TyConRep knownIn
+  rep = RepK $ knownIn  @uni @(K f)
 
 instance Typeable f => Pretty (Inner uni (TyCon (K f))) where
   pretty _ = viaShow $ typeRep @f
-instance (GEq uni, KnownIn uni (Ty t)) => TypeIn uni (Ty (t :: GHC.Type)) where
+
+
+instance (GEq uni, KnownIn uni (T t)) => TypeIn uni (Ty (t :: GHC.Type)) where
   newtype Inner uni (Ty t) = Val t deriving (Eq)
-  rep = TyRep knownIn
+  rep = RepT knownIn
 
 deriving newtype instance Num t => Num (Inner uni (Ty t))
 deriving newtype instance IsString t => IsString (Inner uni (Ty t))
@@ -82,7 +101,7 @@ deriving newtype instance Pretty t => Pretty (Inner uni (Ty t))
 
 instance (
     GEq uni,
-    KnownIn uni (TyCon (K f)),
+    KnownIn uni (K f),
     TypeIn uni ty)
   => TypeIn uni (TyCon (K  (f :: GHC.Type -> GHC.Type)) :@ ty) where
     newtype Inner uni (TyCon (K f) :@ ty) = Con1 (f (Inner uni ty))
@@ -103,7 +122,6 @@ instance (GEq uni, TypeIn uni a, TypeIn uni b) => TypeIn uni (a :& b) where
   data Inner uni (a :& b) = Inner uni a :/\ Inner uni b
   rep = rep :&& rep
 
-
 instance (GEq uni, TypeIn uni a, TypeIn uni b) => TypeIn uni (a :| b) where
   data Inner uni (a :| b) = L (Inner uni a) | R  (Inner uni b)
   rep = rep :|| rep
@@ -112,6 +130,9 @@ instance (GEq uni, TypeIn uni a) => TypeIn uni (List a) where
   newtype Inner uni (Diesel.Type.List a) = ListVal [Inner uni a]
   rep = ListRep rep
 
+instance GEq uni => TypeIn uni 'Star where
+  data Inner uni Star = StarV deriving (Show, Eq, Ord)
+  rep = StarRep
 
 {-
    Constraints over an `Inner`. This is a utility class to implement `Each`.
@@ -121,23 +142,21 @@ instance (GEq uni, TypeIn uni a) => TypeIn uni (List a) where
    we cannot use `Has` directly to walk under the existential, so we need this.
 -}
 
-class  InnerC c uni ty where
-  innerDict :: Dict (c (Inner uni ty))
-  innerC :: forall r. TyRep uni ty -> (c (Inner uni ty) => r) -> r
+class (IsInner uni t, TypeIn uni (TypeOf t), c (Inner uni (TypeOf t))) => InnerC c uni t where
+  innerDict :: Dict (c (Inner uni (TypeOf t)))
 
-instance forall c uni t. (c (Inner uni t), TypeIn uni t) => InnerC c uni t where
+
+instance (IsInner uni t, TypeIn uni (TypeOf t), c (Inner uni (TypeOf t))) => InnerC c uni t where
   innerDict = Dict
-  innerC _ f = f
 
 
 
 {-
    Universal quantification over the ground types of a type universe.
 -}
-class Has (InnerC c uni) uni => Each (c :: GHC.Type  -> GHC.Constraint)  uni where
-  each :: forall ty r. uni ty -> (c (Inner uni ty) => r) -> r
+class Has (InnerC c uni) uni => Each (c :: GHC.Type  -> GHC.Constraint) uni where
+  each :: forall t r. uni t -> (c (Inner uni (TypeOf t)) => r) -> r
   each uni f = case argDict @(InnerC c uni) @uni uni of
-    Dict ->  case innerDict @c @uni @ty  of
+    Dict ->  case innerDict @c @uni @t  of
      (Dict :: Dict (c (Inner uni ty))) -> f
 instance Has (InnerC c uni) uni => Each c uni
-

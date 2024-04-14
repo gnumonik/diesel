@@ -42,49 +42,54 @@ data Type t
   | List (Type t)
   -- A type expression.
   | Type t :@ Type t
+  | Star
   deriving (Show, Eq)
 infixr 0 :~>
 infixr 3 :&
 infixr 2 :|
 infixl 9 :@
 
+type T :: GHC.Type -> GHC.Type
+data T a
+
+type K :: forall k. k -> GHC.Type
 data K a
 
 instance Typeable k => Show (K k) where
   show _ = "K " <> show (typeRep @k)
 
 
-type TyK a = Ty (K a)
-
 {-
    Witnesses a type in a given universe.
 -}
-data TyRep :: forall (k :: GHC.Type). (Type k -> GHC.Type ) -> Type k ->  GHC.Type where
-  TyRep :: uni (Ty k) -> TyRep uni (Ty k)
-  TyConRep :: uni (TyCon (K f)) -> TyRep uni (TyCon (K f))
+data TyRep :: forall (k :: GHC.Type). (GHC.Type -> GHC.Type ) -> Type k ->  GHC.Type where
+  RepT :: uni (T t) -> TyRep uni (Ty t)
+  RepK :: uni (K f) -> TyRep uni (TyCon (K f))
   (:~~>) :: TyRep uni k1 -> TyRep uni k2  -> TyRep uni (k1 :~> k2)
   (:&&) :: TyRep uni k1 -> TyRep uni k2 -> TyRep uni (k1 :& k2)
   (:||) :: TyRep uni k1 -> TyRep uni k2 -> TyRep uni (k1 :| k2)
   ListRep :: TyRep uni k1 -> TyRep uni (List k1)
-  (:@@) :: uni (TyCon (K f)) -> TyRep uni a -> TyRep uni (TyCon (K f) :@ a)
+  (:@@) :: uni (K f) -> TyRep uni a -> TyRep uni (TyCon (K f) :@ a)
+  StarRep :: TyRep uni Star
 infixl 9 :@@
 
 deriving instance (forall tx. Show (uni tx)) => Show (TyRep uni t)
 
 instance (forall tx. Pretty (uni tx)) => Pretty (TyRep uni t) where
   pretty = \case
-    TyRep uni -> pretty uni
-    TyConRep uni -> pretty uni
+    RepT uni -> pretty uni
+    RepK uni -> pretty uni
     t1 :~~> t2 -> pretty t1 <+> " ~> " <+> pretty t2
     t1 :&& t2  -> pretty t1 <+> " & " <+> pretty t2
     t1 :|| t2  -> pretty t1 <+> " | " <+> pretty t2
     ListRep t1 -> list [pretty t1]
     t1 :@@ t2  -> pretty t1 <+> " @ " <+> pretty t2
+    StarRep -> "*"
 
 
 
 instance GEq uni => GEq (TyRep uni) where
-  geq (TyRep t) (TyRep t') = case geq t t' of
+  geq (RepT t) (RepT t') = case geq t t' of
     Just Refl -> Just Refl
     Nothing -> Nothing
   geq (a :~~> b) (a' :~~> b') = case geq a a' of

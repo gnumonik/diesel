@@ -17,7 +17,7 @@ import Data.GADT.Compare ( GEq(geq))
 import Data.Constraint.Extras ( Has(argDict) )
 
 import Diesel.Type
-    ( Type((:~>), Ty, TyCon, (:@)), K, TyRep((:@@)) )
+    ( Type((:~>), Ty, TyCon, (:@)), K, TyRep((:@@)), T )
 import Diesel.Uni
     ( Inner(Val, Con1, (:/\), L, R, ListVal, Fun),
       KnownIn(..),
@@ -63,7 +63,7 @@ asFunction (Fun f) = f
    Users define instances of this for the `fun` GADT in their
    `Expr uni fun ty` expressions in order to declare builtins.
 -}
-type Eval :: forall t. (Type t -> GHC.Type) -> (Type t -> GHC.Type) ->  GHC.Constraint
+type Eval :: forall t. (GHC.Type -> GHC.Type) -> (Type t -> GHC.Type) ->  GHC.Constraint
 class GEq fun =>  Eval uni fun  where
   evalBuiltin :: forall a b. fun (a :~> b) -> Inner uni (a :~> b) -- Inner uni a -> Inner uni b
 
@@ -104,12 +104,12 @@ eval e = go $ fromMaybe  e  (normalize e)
           Right xs' -> pure $ ListVal xs'
       bad -> error (show bad) -- Left ex
 
-data U :: forall t. Type t -> GHC.Type where
-  UInt :: U (Ty Int)
-  UBool :: U (Ty Bool)
-  UMaybe :: U (TyCon (K Maybe))
+data U :: GHC.Type  -> GHC.Type where
+  UInt :: U (T Int)
+  UBool :: U (T Bool)
+  UMaybe :: U (K Maybe)
 
-instance (c (Ty Int), c (Ty Bool), c (TyCon (K Maybe))) => Has c U where
+instance (c (T Int), c (T Bool), c (K Maybe)) => Has c U where
   argDict = \case
     UInt -> Dict
     UBool -> Dict
@@ -137,38 +137,42 @@ instance GEq U where
   geq UMaybe UMaybe = Just Refl
   geq _ _ = Nothing
 
-instance KnownIn U (Ty Int) where
+instance KnownIn U (T Int) where
   knownIn = UInt
 
-instance KnownIn U (Ty Bool) where
+instance KnownIn U (T Bool) where
   knownIn = UBool
 
-instance  KnownIn U MaybeT where
+instance  KnownIn U (K Maybe) where
   knownIn = UMaybe
 
 data F :: forall t. Type t -> GHC.Type where
   Add :: F (Ty Int :~> Ty Int :~> Ty Int)
   Subtract :: F (Ty Int :~> Ty Int :~> Ty Int)
   EJust :: TyRep U t -> F (t :~> MaybeT :@ t)
-  --ENothing ::  TyRep U t -> F (MaybeT :@ t)
+  ENothing :: TyRep U t -> F (MaybeT :@ t)
 
 instance Pretty (F t) where
   pretty = \case
     Add -> "add"
     Subtract -> "subtract"
     EJust rp -> "Just" <+> "@" <> parens (pretty rp)
+    ENothing rp -> "Nothing" <+> "@" <> parens (pretty rp)
 
 instance Show (F t) where
   show = \case
     Add -> "Add"
     Subtract -> "Subtract"
     EJust r -> "EJust " <> show r
-    --ENothing r -> "ENothing " <> show r
+    ENothing r -> "ENothing " <> show r
 
 instance GEq F where
  geq Add Add = Just Refl
  geq Subtract Subtract = Just Refl
  geq (EJust r1) (EJust r2) = case geq r1 r2 of
+   Just Refl -> Just Refl
+   Nothing -> Nothing
+ geq (ENothing r1) (ENothing r2) = case geq r1 r2 of
    Just Refl -> Just Refl
    Nothing -> Nothing
  geq _ _ = Nothing

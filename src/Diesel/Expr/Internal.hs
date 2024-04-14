@@ -49,7 +49,7 @@ showParens = go . show where go str = "(" <> str <> ")"
   all functions are constructed with lam1 or lam, but isn't generally
   safe for users to manipulate.
 -}
-data Expr :: forall (t :: GHC.Type). (Type t -> GHC.Type) -> (Type t -> GHC.Type) -> Type t -> GHC.Type where
+data Expr :: forall (t :: GHC.Type). (GHC.Type -> GHC.Type) -> (Type t -> GHC.Type) -> Type t -> GHC.Type where
   Constant :: TypeIn uni (Ty t) => Inner uni (Ty t) -> Expr uni fun (Ty t)
 
   Abs :: TyRep uni a ->  Int -> (Expr uni fun b) -> Expr uni fun (a :~> b)
@@ -64,7 +64,7 @@ data Expr :: forall (t :: GHC.Type). (Type t -> GHC.Type) -> (Type t -> GHC.Type
 
   CompilerBuiltin :: Universal uni t -> Expr uni fun t
 
-data ADT :: forall (t :: GHC.Type). (Type t -> GHC.Type) -> (Type t -> GHC.Type) -> Type t -> GHC.Type where
+data ADT :: forall (t :: GHC.Type). (GHC.Type -> GHC.Type) -> (Type t -> GHC.Type) -> Type t -> GHC.Type where
   MkPair :: Expr uni fun a -> Expr uni fun b -> ADT uni fun (a :& b)
   InL :: TyRep uni b -> Expr uni fun a -> ADT uni fun (a :| b)
   InR :: TyRep uni a -> Expr uni fun b -> ADT uni fun (a :| b)
@@ -138,7 +138,7 @@ instance (GEq uni, GEq fun, Each Eq uni) => GEq (Expr uni fun) where
   geq c1@(Constant x) c2@(Constant y) = case geq (typeOf c1) (typeOf c2) of
     Nothing -> Nothing
     Just Refl -> case typeOf c1 of
-      TyRep uni -> if each @Eq @uni uni $ x == y
+      RepT uni -> if each @Eq @uni uni $ x == y
                    then  Just Refl
                    else Nothing
   geq e1@(Abs _ n body) e2@(Abs _ n' body') | n == n' = case (geq body body', geq (typeOf e1) (typeOf e2)) of
@@ -158,7 +158,7 @@ instance (GEq uni, GEq fun, Each Eq uni) => GEq (Expr uni fun) where
 instance (Each Show uni, forall tx. Show (fun tx), forall tx. Show (uni tx)) => Show (Expr uni fun t) where
   show = \case
     xp@(Constant v) -> case typeOf xp of
-      TyRep uni -> each @Show @uni uni $ show v
+      RepT uni -> each @Show @uni uni $ show v
     Abs r i body -> "Abs " <> showParens r <> " " <> show i <> " " <> showParens body
     App e1 e2 -> "App " <> showParens e1 <> " " <> showParens e2
     Builtin t1 t2 fun -> "Builtin " <> sparens (show t1 <> " :~> " <> show t2) <> " " <> show fun
@@ -170,10 +170,11 @@ instance ( Each Pretty uni
          , forall tx. Pretty (TyRep uni tx)
          , forall tx. Pretty (fun tx)
          , forall tx. Pretty (uni tx)
-         , forall tx. Pretty (Universal uni tx)) => Pretty (Expr uni fun t) where
+         , forall tx. Pretty (Universal uni tx)
+         ) => Pretty (Expr uni fun t) where
   pretty = \case
     xp@(Constant v) -> case typeOf xp of
-      TyRep uni -> each @Pretty @uni uni $ pretty v
+      RepT uni -> each @Pretty @uni uni $ pretty v
     Abs ty i body -> align . group $
         "\\" <> parens ("x" <> pretty i <> " :: " <> pretty ty) <> " -> "
           <> hardline <> indent 2 (align (pretty body))
@@ -276,7 +277,7 @@ normalize = \case
 class TypeIn uni k => ConstantIn uni k where
   val :: forall fun. Inner uni k -> Expr uni fun k
 
-instance (TypeIn uni (Ty t), KnownIn uni (Ty t)) => ConstantIn uni (Ty t) where
+instance (TypeIn uni (Ty t), KnownIn uni (T t)) => ConstantIn uni (Ty t) where
   val = Constant
 
 instance (ConstantIn uni a, ConstantIn uni b) => ConstantIn uni (a :& b) where

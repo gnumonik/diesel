@@ -21,7 +21,7 @@ import Diesel.Type ( Type(List, (:|), (:&), (:~>)), TyRep )
 import Prettyprinter
 
 -- todo: Don't have a tyrep of the function, just have tyreps for the type args
-data Universal :: (Type t -> GHC.Type) -> Type t -> GHC.Type where
+data Universal :: (GHC.Type -> GHC.Type) -> Type t -> GHC.Type where
   -- pair stuff
   FstPair :: forall uni a b. TyRep uni ((a :& b) :~> a) -> Universal uni ((a :& b) :~> a)
   SndPair :: forall uni a b. TyRep uni ((a :& b) :~> b) -> Universal uni ((a :& b) :~> b)
@@ -38,9 +38,9 @@ data Universal :: (Type t -> GHC.Type) -> Type t -> GHC.Type where
   UnconsList :: forall uni x. TyRep uni (List x :~> (List x :| (x :& List x))) -> Universal uni (List x :~> (List x :| (x :& List x)))
   FoldrList :: forall uni a b. TyRep uni ((a :~> b :~> b) :~> b :~> List a :~> b) -> Universal uni ((a :~> b :~> b) :~> b :~> List a :~> b)
 
-deriving instance (forall t. Show (TyRep uni t)) => Show (Universal uni tx)
+deriving instance (forall t. Show (TyRep uni t), forall t. Show (uni t)) => Show (Universal uni tx)
 
-instance (forall tx. Pretty (TyRep uni tx)) => Pretty (Universal uni t) where
+instance (forall tx. Pretty (TyRep uni tx), forall tx. (Pretty (uni tx))) => Pretty (Universal uni t) where
   pretty = align . group . \case
     FstPair _ -> "fst" -- <+> "@" <> parens (pretty rp)
     SndPair _ -> "snd" -- <+> "@" <> parens (pretty rp)
@@ -68,7 +68,7 @@ typeOfUniversal = \case
   UnconsList r -> r
   FoldrList r -> r
 
-instance GEq (TyRep uni) => GEq (Universal uni) where
+instance (GEq uni, GEq (TyRep uni)) => GEq (Universal uni) where
   geq (FstPair a) (FstPair b) = case geq a b of
     Nothing -> Nothing
     Just Refl -> Just Refl
