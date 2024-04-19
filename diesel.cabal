@@ -52,5 +52,12 @@ test-suite diesel-test
     hs-source-dirs:   test
     main-is:          Main.hs
     build-depends:
-        base ^>=4.18.0.0,
-        diesel
+        base ^>=4.18.0.0
+      , diesel
+      , some
+      , constraints
+      , constraints-extras
+      , dependent-sum
+      , pretty-simple
+      , text
+      , prettyprinter
