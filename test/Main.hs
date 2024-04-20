@@ -6,41 +6,48 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE AllowAmbiguousTypes, TypeFamilies #-}
 
-{-# LANGUAGE LambdaCase, QuantifiedConstraints, OverloadedStrings #-}
+{-# LANGUAGE LambdaCase, QuantifiedConstraints, OverloadedStrings, TemplateHaskell #-}
 
 module Main (main) where
 
 import qualified Data.Kind as GHC
 import Data.Type.Equality ( type (:~:)(Refl) )
+import Diesel.TH.Derive
 
 import Data.Either (isRight)
 
 import Data.GADT.Compare ( GEq(geq))
-import Data.Constraint.Extras ( Has(argDict) )
+import Data.Constraint.Extras ( Has(..) )
 
 import Diesel
+    ( eval,
+      (#),
+      (#$),
+      lam1,
+      Eval(..),
+      Lam(lam),
+      ConstantIn(val),
+      Expr(Builtin),
+      K,
+      T,
+      TyRep((:~~>), (:@@)),
+      Type((:~>), TyCon, Ty, (:@)),
+      Inner(Val, Con1, Fun),
+      KnownIn(..),
+      TypeIn(rep, Inner) )
+import Diesel.Type ( K, T )
 import Data.Coerce (coerce)
-import Data.Constraint (Dict(Dict))
 
-import Prettyprinter
-
-main :: IO ()
-main = do
-  if isRight result
-    then do
-      print beep
-    else error "failed"
+import Prettyprinter ( (<+>), parens, Doc, Pretty(pretty) )
 
 data U :: GHC.Type  -> GHC.Type where
   UInt :: U (T Int)
   UBool :: U (T Bool)
   UMaybe :: U (K Maybe)
 
-instance (c (T Int), c (T Bool), c (K Maybe)) => Has c U where
-  argDict = \case
-    UInt -> Dict
-    UBool -> Dict
-    UMaybe -> Dict
+deriveKnownIn ''U
+customDeriveArgDict ''U
+deriveGEq ''U
 
 instance Show (U t) where
   show = \case
@@ -58,27 +65,13 @@ type IntT = Ty Int
 -- type BoolT = Ty Bool
 type MaybeT = TyCon (K Maybe)
 
-instance GEq U where
-  geq UInt UInt = Just Refl
-  geq UBool UBool = Just Refl
-  geq UMaybe UMaybe = Just Refl
-  geq _ _ = Nothing
-
-instance KnownIn U (T Int) where
-  knownIn = UInt
-
-instance KnownIn U (T Bool) where
-  knownIn = UBool
-
-instance  KnownIn U (K Maybe) where
-  knownIn = UMaybe
-
 data F :: forall t. Type t -> GHC.Type where
   Add :: F (Ty Int :~> Ty Int :~> Ty Int)
   Subtract :: F (Ty Int :~> Ty Int :~> Ty Int)
   IfThenElse :: TyRep U res -> F (Ty Bool :~> res :~> res :~> res)
   EJust :: TyRep U t -> F (t :~> MaybeT :@ t)
   ENothing :: TyRep U t -> F (MaybeT :@ t)
+deriveGEq ''F
 
 instance Pretty (F t) where
   pretty = \case
@@ -96,22 +89,6 @@ instance Show (F t) where
     EJust r -> "EJust " <> show r
     ENothing r -> "ENothing " <> show r
 
-instance GEq F where
- geq Add Add = Just Refl
- geq Subtract Subtract = Just Refl
- geq (IfThenElse r1) (IfThenElse r2) = case geq r1 r2 of
-   Just Refl -> Just Refl
-   Nothing -> Nothing
- geq (EJust r1) (EJust r2) = case geq r1 r2 of
-   Just Refl -> Just Refl
-   Nothing -> Nothing
- geq (ENothing r1) (ENothing r2) = case geq r1 r2 of
-   Just Refl -> Just Refl
-   Nothing -> Nothing
- geq _ _ = Nothing
- --geq (ENothing r1) (ENothing r2)  = case geq r1 r2 of
- --  Just Refl -> Just Refl
- --  Nothing -> Nothing
 
 instance Eval U F where
   evalBuiltin = \case
@@ -124,8 +101,6 @@ instance Eval U F where
     IfThenElse _ ->  Fun $ \cond -> Fun $ \troo -> Fun $ \fawlse -> if coerce cond then troo else fawlse
     EJust _ -> Fun $ \x -> Con1 $ Just x
     ENothing _ -> Con1 Nothing
-    --ENothing r -> Con1 Nothing
-
 
 plus :: Expr U F (IntT :~> IntT :~> IntT)
 plus = Builtin rep  Add
@@ -145,10 +120,12 @@ testExpr = lam $ \x y -> just rep #$ minus # (plus # x # y) #  (minus # y # x)
 result :: Either (Expr U F (MaybeT :@ IntT)) (Inner U (MaybeT :@ IntT))
 result = eval $ testExpr # val 1 # val 1
 
--- Need a TypeIn instance for maybe or this won't work. Need a new ctor of Type that can be matched in
--- instances. The value could be a function or a proxy or whatever, doesn't matter
---bop :: String
---bop =  show testExpr
-
 beep :: Doc ann
 beep = pretty testExpr
+
+main :: IO ()
+main =  do
+  if isRight result
+    then do
+      print beep
+    else error "failed"

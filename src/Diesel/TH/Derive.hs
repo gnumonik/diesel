@@ -9,7 +9,9 @@ import Control.Monad
 import Language.Haskell.TH.Datatype
 import Language.Haskell.TH.Syntax
 import Data.List (foldl')
-import Data.Bifunctor (Bifunctor(bimap))
+import Data.Bifunctor (Bifunctor(..))
+import qualified Data.Text.Lazy as TL
+import Text.Pretty.Simple (pShow)
 
 {-
 data TestUni :: forall (t :: GHC.Type). DT.Type t -> GHC.Type where
@@ -25,34 +27,56 @@ testUniInfo = do
   pure $ LitE (StringL pretty)
 -}
 
-
+testInfo :: Name -> Q [Dec] -- Exp
+testInfo nm = do
+  dt <- reifyDatatype nm
+  let pretty = TL.unpack (pShow dt)
+      body =  LitE (StringL pretty)
+  pure [FunD (mkName "mahTestInfo") [Clause [] (NormalB body) []]]
 -- This is Semigroup but I definitely don't wanna define weird orphan semigroup instances
 -- for TH constructs
 class Apply t where
-  (#) :: t -> t -> t
+  (##) :: t -> t -> t
 
 instance Apply Exp where
-  (#) = AppE
+  (##) = AppE
 
 instance Apply Type where
-  (#) = AppT
-infixl 8 #
+  (##) = AppT
+infixl 8 ##
 
+data Kinded a = KK a | KT a deriving (Show, Eq, Functor)
 
-getInnerTy :: Type -> Q Type
+unKinded :: Kinded a -> a
+unKinded = \case
+  KK a -> a
+  KT a -> a
+
+getInnerTy :: Type -> Q (Kinded Type)
 getInnerTy = \case
   AppT (AppT EqualityT _) rest -> getInnerTy rest
-  AppT (PromotedT ct) rest | isDieselTy ct -> pure rest
+  AppT (ConT ct) rest | isDieselT ct -> pure (KT rest)
+  AppT (ConT ct) rest | isDieselK ct -> pure (KK rest)
   other -> fail $ "Unsupported Uni type parameter: " <> show other
  where
-   isDieselTy x = nameBase x == "Ty"
-                  && nameModule x == Just "Diesel.Type"
+   isDieselMod x = nameModule x == Just "Diesel.Type"
+   isDieselK x = nameBase x == "K" && isDieselMod x
+   isDieselT x = nameBase x == "T" && isDieselMod x
+
+mkUniverse :: Name -> Q [Dec]
+mkUniverse nm = do
+  hasDecls <- customDeriveArgDict nm
+  knownInDecls <- deriveKnownIn nm
+  geqDecls <- deriveGEq nm
+  pure $ concat [hasDecls, knownInDecls, geqDecls]
 
 
 -- we replace un-capturable names w/ capturable ones
-collectTyVars :: Type -> Q ([Name],Type)
-collectTyVars t = snd <$> go ['a'..] t
-  where
+collectTyVars :: Kinded Type -> Q ([Name],Kinded Type)
+collectTyVars = \case
+  KT t -> second KT . snd <$> go ['a'..] t
+  KK t -> second KK . snd <$> go ['a'..] t
+ where
     go :: String -> Type -> Q (String,([Name],Type))
     go [] _ = error "Ran out of names (this should not happen)"
     go xs@(c:cs) ty = case ty of
@@ -78,7 +102,7 @@ customDeriveArgDict nm = do
   -- make the context from the ctors
   instanceCxt <- traverse mkCxtElem datatypeCons
 
-  let instanceType = ConT (mkName "Has") # VarT constraint # ConT nm
+  let instanceType = ConT (mkName "Has") ## VarT constraint ## ConT nm
 
   methodBodyMatches <- traverse mkMethodBodyMatch datatypeCons
 
@@ -112,21 +136,21 @@ customDeriveArgDict nm = do
       mkBody (z:zs) = do
         let hasC = AppTypeE (VarE (mkName "has")) (VarT constraint)
             dol  = VarE (mkName "$")
-            lhs  = hasC # VarE z
+            lhs  = hasC ## VarE z
         UInfixE lhs dol  <$> mkBody zs
 
    mkCxtElem :: ConstructorInfo -> Q Pred
    mkCxtElem ConstructorInfo{..} = do
-     let mkTy z = PromotedT (mkName "Diesel.Type.Ty") # z
-         appC z = VarT constraint # mkTy z
+     let appC z = VarT constraint ##  z
      innerTy <- getInnerTy $ head constructorContext
      collectTyVars innerTy >>= \case
-       ([],t) -> pure $ appC t
+       ([],t) -> pure $ appC $ mkTy t
        (ns,t) -> do
          let tvBndrs = (`PlainTV` SpecifiedSpec) <$> ns
              cxt     = appC . VarT <$> ns
-             rhs     = appC t
+             rhs     = appC $ mkTy t
          pure $ ForallT tvBndrs cxt rhs
+
 
 deriveKnownIn :: Name -> Q [Dec]
 deriveKnownIn nm = do
@@ -136,21 +160,20 @@ deriveKnownIn nm = do
  where
    mkKnownInInstance :: ConstructorInfo -> Q Dec
    mkKnownInInstance ConstructorInfo{..} = do
-     let mkTy x = PromotedT (mkName "Diesel.Type.Ty") # x
-         knownInUni x = ConT (mkName "KnownIn") # ConT nm # mkTy x
+     let knownInUni x = ConT (mkName "KnownIn") ## ConT nm ## x
      innerTy <- getInnerTy $ head constructorContext
      collectTyVars innerTy >>= \case
        ([],t) -> do
-         let knownInClass = knownInUni t
+         let knownInClass = knownInUni (mkTy t)
              methodDec = FunD (mkName "knownIn")
                            [Clause [] (NormalB (ConE constructorName)) []]
          pure $ InstanceD Nothing [] knownInClass [methodDec]
        (ns,t) -> do
          let numFields = length constructorFields
              ctx = knownInUni . VarT <$> ns
-             tyInstType = knownInUni t
+             tyInstType = knownInUni (mkTy t)
              body = NormalB
-                    $ foldl' (#) (ConE  constructorName) $ replicate numFields (VarE $ mkName "knownIn")
+                    $ foldl' (##) (ConE  constructorName) $ replicate numFields (VarE $ mkName "knownIn")
              methodDec = FunD (mkName "knownIn")
                          [Clause [] body []]
          pure $ InstanceD Nothing ctx tyInstType [methodDec]
@@ -162,10 +185,10 @@ deriveGEq nm = do
   clauses <- traverse mkMethodClause datatypeCons
   let catchallClause = Clause [WildP,WildP] (NormalB nothingE) []
       method = FunD (mkName "geq") $ clauses <> [catchallClause]
-      geqClass = ConT (mkName "GEq") # ConT nm
+      geqClass = ConT (mkName "GEq") ## ConT nm
   pure [InstanceD Nothing [] geqClass  [method]]
  where
-   justReflE = ConE (mkName "Just") # ConE (mkName "Refl")
+   justReflE = ConE (mkName "Just") ## ConE (mkName "Refl")
    nothingE  = ConE (mkName "Nothing")
 
    justReflP = ConP (mkName "Just") [] [ConP (mkName "Refl") [] []]
@@ -174,11 +197,11 @@ deriveGEq nm = do
    geqE = VarE (mkName "geq")
 
    mkCase :: [(Name,Name)] -> Exp
-   mkCase [(l,r)] = CaseE (geqE # VarE l # VarE r)
+   mkCase [(l,r)] = CaseE (geqE ## VarE l ## VarE r)
                     [ Match nothingP (NormalB nothingE) []
                     , Match justReflP (NormalB justReflE) []
                     ]
-   mkCase ((l,r):xs) = CaseE (geqE # VarE l # VarE r)
+   mkCase ((l,r):xs) = CaseE (geqE ## VarE l ## VarE r)
                     [ Match nothingP (NormalB nothingE) []
                     , Match justReflP (NormalB $ mkCase xs) []
                     ]
@@ -188,7 +211,7 @@ deriveGEq nm = do
    mkMethodClause ConstructorInfo{..}
      | null constructorFields  = do
        let pat = replicate 2 $ ConP constructorName [] []
-           body = NormalB $ ConE (mkName "Just") # ConE (mkName "Refl")
+           body = NormalB $ ConE (mkName "Just") ## ConE (mkName "Refl")
        pure $ Clause pat body []
      | otherwise = do
          let mkArgPairs :: forall x. Char -> x -> (Name,Name)
@@ -204,26 +227,18 @@ deriveGEq nm = do
              body = NormalB $ mkCase argNames
          pure $ Clause pat body []
 
+mkTy :: Kinded Type -> Type
+mkTy = \case
+           KT z -> ConT (mkName "Diesel.Type.T") ## z
+           KK z -> ConT (mkName "Diesel.Type.K") ## z
+
 
 checkIndexKind :: DatatypeInfo -> Q ()
 checkIndexKind  DatatypeInfo{..} = case datatypeVars of
-  [ KindedTV tx _ StarT,
-    KindedTV _ _ (AppT (ConT dieselType) (VarT ty))] -> do
-    let okT = tx == ty
-        okDiesel = nameBase dieselType == "Type"
-                   && nameModule dieselType == Just "Diesel.Type"
-    unless (okT && okDiesel) $ do
-      let msg = "Wrong kind index in universe type '"
-                <> nameBase datatypeName
-                <> "'. The return kind of a universe GADT must be "
-                <> "'forall (t :: GHC.Type). Diesel.Type.Type t -> GHC.Type'"
-                <> " your type has return kind index:\n"
-                <> show datatypeVars
-                <> "\n" <> show (namePackage dieselType)
-      fail msg
+  [ KindedTV _ _ StarT] -> pure ()
   _ -> fail $ "Wrong kind index in universe type '"
                 <> nameBase datatypeName
                 <> "'. The return kind of a universe GADT must be "
-                <> "'forall (t :: GHC.Type). Diesel.Type.Type t -> GHC.Type'"
+                <> "'GHC.Type -> GHC.Type'"
                 <> " your type has return kind index:\n"
                 <> show datatypeVars

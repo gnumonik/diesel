@@ -14,20 +14,23 @@ extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall -Werror
+    ghc-options: -Wall
 
 library
     import:           warnings
-    exposed-modules:  Diesel
-    other-modules:
-      Diesel.Eval
-      Diesel.Expr
-      Diesel.Expr.Internal
-      Diesel.Type
-      Diesel.Uni
-      Diesel.Universal
-      Diesel.Prelude
-      Diesel.TH.Derive
+    exposed-modules:
+      Diesel,
+      Diesel.TH.Derive,
+      Diesel.Eval,
+      Diesel.Expr,
+      Diesel.Expr.Internal,
+      Diesel.Type,
+      Diesel.Uni,
+      Diesel.Universal,
+      Diesel.Prelude,
+   --  other-modules:
+
+
     -- other-extensions:
     build-depends:
         base ^>=4.18.0.0
